@@ -6,5 +6,13 @@
   "description": "Плагин для отправки файлов на несколько компьютеров одновременно с отслеживанием прогресса передачи и статуса в реальном времени.",
   "hasAdminPanel": true,
   "homepage": "https://github.com/Sokol549/MeshCentral-MultiDeploy",
-  "changelogUrl": "https://raw.githubusercontent.com/Sokol549/MeshCentral-MultiDeploy/master/changelog.md"
+  "changelogUrl": "https://raw.githubusercontent.com/Sokol549/MeshCentral-MultiDeploy/master/changelog.md",
+  "configUrl": "https://raw.githubusercontent.com/Sokol549/MeshCentral-MultiDeploy/master/config.json",
+  "downloadUrl": "https://github.com/Sokol549/MeshCentral-MultiDeploy/archive/master.zip",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sokol549/MeshCentral-MultiDeploy.git"
+  },
+  "versionHistoryUrl": "https://api.github.com/repos/Sokol549/MeshCentral-MultiDeploy/tags",
+  "meshCentralCompat": ">=1.0.0"
 }
