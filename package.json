@@ -1,0 +1,15 @@
+{
+  "name": "meshcentral-multideploy",
+  "version": "1.0.0",
+  "description": "MeshCentral plugin for multi-device file deployment with real-time transfer tracking",
+  "main": "multideploy.js",
+  "keywords": [
+    "meshcentral",
+    "meshcentral-plugin",
+    "file-transfer",
+    "deployment",
+    "multideploy"
+  ],
+  "author": "MeshCentral Community",
+  "license": "Apache-2.0"
+}

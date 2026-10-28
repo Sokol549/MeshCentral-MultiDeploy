@@ -1,0 +1,10 @@
+{
+  "name": "Multi-Device File Deployer",
+  "shortName": "multideploy",
+  "version": "1.0.0",
+  "author": "MeshCentral Community",
+  "description": "Плагин для отправки файлов на несколько компьютеров одновременно с отслеживанием прогресса передачи и статуса в реальном времени.",
+  "hasAdminPanel": true,
+  "homepage": "https://github.com/MeshCentral-Community/meshcentral-multideploy",
+  "changelogUrl": "https://raw.githubusercontent.com/MeshCentral-Community/meshcentral-multideploy/master/changelog.md"
+}
