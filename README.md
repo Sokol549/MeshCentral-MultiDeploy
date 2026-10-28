@@ -106,7 +106,10 @@
 1. Войдите в MeshCentral под учётной записью администратора сайта.
 2. Перейдите в раздел **My Server** (Мой сервер) ➔ вкладка **Plugins** (Плагины).
 3. Нажмите кнопку **Download Plugin** (Загрузить плагин).
-4. Вставьте прямую ссылку на `config.json` вашего репозитория (например, `https://raw.githubusercontent.com/MeshCentral-Community/meshcentral-multideploy/master/config.json`).
+4. Вставьте прямую ссылку на `config.json` вашего репозитория:
+   ```text
+   https://raw.githubusercontent.com/Sokol549/MeshCentral-MultiDeploy/master/config.json
+   ```
 5. Нажмите **OK** и перезагрузите сервер при появлении запроса.
 
 ---
