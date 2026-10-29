@@ -1635,8 +1635,7 @@ module.exports = function (parent) {
                         reject(new Error('Встроенный файловый канал MeshCentral недоступен в этом интерфейсе'));
                         return;
                     }
-                    self.ensureNativeDirectory(nodeId, target).then(function () {
-                        var redirect, offset = 0, complete = false, settled = false, readerBusy = false;
+                    var redirect, offset = 0, complete = false, settled = false, readerBusy = false, directoryResponse = null;
                         var connectionTimer = setTimeout(function () { finish(new Error('Таймаут подключения к файловому каналу')); }, 30000);
                         var activityTimer = null;
                         function touch() {
@@ -1653,6 +1652,39 @@ module.exports = function (parent) {
                             if (error) reject(error); else resolve();
                         }
                         function sendText(message) { redirect.sendText(JSON.stringify(message)); }
+                        function ensureDirectoryOverFileChannel(done) {
+                            var directory = target.directory;
+                            var current = target.isWindows ? directory.substring(0, 3) : '/';
+                            var remainder = target.isWindows ? directory.substring(3) : directory.substring(1);
+                            var parts = remainder.split('/').filter(function (part) { return part.length > 0; });
+                            var index = 0;
+                            function nextDirectory() {
+                                if (index >= parts.length) { done(); return; }
+                                sendText({ action: 'ls', reqid: 77, path: current });
+                            }
+                            directoryResponse = function (message) {
+                                if (!message) return false;
+                                if (message.reqid !== 77) return false;
+                                if (!Array.isArray(message.dir)) { finish(new Error('Агент не может открыть папку ' + current)); return true; }
+                                var part = parts[index];
+                                var exists = message.dir.some(function (entry) { return entry.n === part && entry.t === 2; });
+                                if (exists) {
+                                    current += (current.endsWith('/') ? '' : '/') + part;
+                                    index++;
+                                    nextDirectory();
+                                } else {
+                                    var newDirectory = current + (current.endsWith('/') ? '' : '/') + part;
+                                    sendText({ action: 'mkdir', reqid: 77, path: newDirectory });
+                                    setTimeout(function () {
+                                        current = newDirectory;
+                                        index++;
+                                        nextDirectory();
+                                    }, 350);
+                                }
+                                return true;
+                            };
+                            nextDirectory();
+                        }
                         function sendNext() {
                             if (settled || readerBusy) return;
                             if (offset >= job.fileSize) {
@@ -1682,6 +1714,7 @@ module.exports = function (parent) {
                         function onMessage(data) {
                             var message = data;
                             try { if (typeof data === 'string') message = JSON.parse(data); } catch (e) { return; }
+                            if (directoryResponse && directoryResponse(message)) return;
                             if (!message || parseInt(message.reqid) !== 1) return;
                             touch();
                             if (message.action === 'uploadstart' || message.action === 'uploadack') sendNext();
@@ -1695,12 +1728,14 @@ module.exports = function (parent) {
                             if (state === 3) {
                                 clearTimeout(connectionTimer);
                                 touch();
-                                sendText({ action: 'upload', reqid: 1, path: target.directory, name: target.name, size: job.fileSize });
+                                ensureDirectoryOverFileChannel(function () {
+                                    directoryResponse = null;
+                                    sendText({ action: 'upload', reqid: 1, path: target.directory, name: target.name, size: job.fileSize });
+                                });
                             }
                             else if (state === 0 && offset > 0) finish(new Error('Файловый канал был отключён'));
                         };
                         try { redirect.Start(nodeId); } catch (e) { finish(e); }
-                    }).catch(reject);
                 });
             },
 
