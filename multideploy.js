@@ -1702,9 +1702,13 @@ module.exports = function (parent) {
 
             ensureNativeDirectory: function (nodeId, target) {
                 return new Promise(function (resolve) {
-                    var command = target.isWindows ? "powershell -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory -Force -Path '" + target.directory.replace(/'/g, "''") + "' | Out-Null\"" : "mkdir -p '" + target.directory.replace(/'/g, "'\\''") + "'";
+                    // The folder command is idempotent. This matters for batches:
+                    // subsequent files must not fail because the folder exists.
+                    var command = target.isWindows
+                        ? 'cmd.exe /d /s /c "if not exist \"' + target.directory.replace(/"/g, '""') + '\" mkdir \"' + target.directory.replace(/"/g, '""') + '\""'
+                        : "mkdir -p '" + target.directory.replace(/'/g, "'\\''") + "'";
                     try { meshserver.send({ action: 'runcommands', nodeids: [nodeId], type: 3, runAsUser: 0, cmds: command }); } catch (e) {}
-                    setTimeout(resolve, 1500);
+                    setTimeout(resolve, 4000);
                 });
             },
 
