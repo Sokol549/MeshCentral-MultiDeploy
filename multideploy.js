@@ -1321,7 +1321,7 @@ module.exports = function (parent) {
                 var visibleCount = 0;
 
                 self.nodes.forEach(function (n) {
-                    if (meshFilter !== 'all' && n.meshid && n.meshid !== meshFilter) return;
+                    if (meshFilter !== 'all' && n.meshid !== meshFilter) return;
                     if (searchFilter) {
                         var text = (n.name + ' ' + (n.ip || '') + ' ' + (n.os || '')).toLowerCase();
                         if (text.indexOf(searchFilter) === -1) return;
