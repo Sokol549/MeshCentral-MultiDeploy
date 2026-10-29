@@ -53,8 +53,9 @@ module.exports = function (parent) {
     };
 
     // Express HTTP hook
-    obj.hook_setupHttpHandlers = function (app) {
-        registerRoutes(app);
+    obj.hook_setupHttpHandlers = function (webserver) {
+        // MeshCentral passes its WebServer object to this hook, not the Express app.
+        registerRoutes(webserver && (webserver.app || webserver));
     };
 
     // Watchdog timer to catch timeouts (runs every 10 seconds)
@@ -130,6 +131,10 @@ module.exports = function (parent) {
 
     // Register all API & transfer routes
     function registerRoutes(app) {
+        if (!app || typeof app.get !== 'function' || typeof app.post !== 'function') {
+            console.log('[MultiDeploy] HTTP routes were not registered: Express app is unavailable.');
+            return;
+        }
         if (app._multideploy_registered) return;
         app._multideploy_registered = true;
 
@@ -878,6 +883,7 @@ module.exports = function (parent) {
             activeJobId: null,
             pollTimer: null,
             currentTab: 'new',
+            nodeLoadError: null,
 
             // Read nodes directly from MeshCentral frontend in-memory state
             getNodesFromBrowser: function () {
@@ -988,6 +994,7 @@ module.exports = function (parent) {
 
             loadNodes: function (cb) {
                 var self = this;
+                self.nodeLoadError = null;
 
                 // Step 1: Immediately read from browser's live MeshCentral memory
                 var local = self.getNodesFromBrowser();
@@ -999,7 +1006,10 @@ module.exports = function (parent) {
 
                 // Step 2: Query plugin backend API in background to merge any missing nodes
                 fetch('/plugin/multideploy/api/nodes')
-                    .then(function (r) { return r.json(); })
+                    .then(function (r) {
+                        if (!r.ok) throw new Error('Сервер вернул HTTP ' + r.status);
+                        return r.json();
+                    })
                     .then(function (data) {
                         if (data && data.nodes && data.nodes.length > 0) {
                             var map = {};
@@ -1029,6 +1039,7 @@ module.exports = function (parent) {
                     })
                     .catch(function (e) {
                         console.warn('[MultiDeploy] /api/nodes fetch:', e);
+                        self.nodeLoadError = 'Не удалось загрузить список компьютеров: ' + e.message;
                         if (cb) cb();
                         self.filterNodes();
                     });
@@ -1318,7 +1329,8 @@ module.exports = function (parent) {
                 });
 
                 if (visibleCount === 0) {
-                    html = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Компьютеры не найдены (нажмите 🔄 для обновления)</td></tr>';
+                    var emptyMessage = self.nodeLoadError || 'Компьютеры не найдены (нажмите 🔄 для обновления)';
+                    html = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">' + emptyMessage + '</td></tr>';
                 }
 
                 tbody.innerHTML = html;
