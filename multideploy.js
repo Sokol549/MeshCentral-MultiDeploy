@@ -1,6 +1,6 @@
 /**
  * MeshCentral Multi-Device File Deployer Plugin
- * Author: MeshCentral Community
+ * Author: sokol549
  * License: Apache-2.0
  */
 
@@ -36,7 +36,6 @@ module.exports = function (parent) {
 
     function saveHistory() {
         try {
-            // Keep latest 100 historical records
             var toSave = jobHistory.slice(-100);
             fs.writeFileSync(historyFile, JSON.stringify(toSave, null, 2), 'utf8');
         } catch (e) {
@@ -70,7 +69,6 @@ module.exports = function (parent) {
             for (var nodeId in job.nodes) {
                 var node = job.nodes[nodeId];
                 if (node.status === 'queued' || node.status === 'downloading') {
-                    // 10 minutes timeout per node
                     if (now - (node.lastActivity || job.startTime) > 10 * 60 * 1000) {
                         node.status = 'failed';
                         node.error = 'Превышено время ожидания (таймаут 10 минут)';
@@ -101,7 +99,6 @@ module.exports = function (parent) {
         job.failCount = failCount;
         job.status = failCount === 0 ? 'completed' : (successCount === 0 ? 'failed' : 'partial');
 
-        // Add to history
         jobHistory.unshift(JSON.parse(JSON.stringify(job)));
         saveHistory();
     }
@@ -125,7 +122,7 @@ module.exports = function (parent) {
         }
         if (req) {
             var host = req.headers.host;
-            var proto = req.connection.encrypted ? 'https://' : 'http://';
+            var proto = (req.connection && req.connection.encrypted) ? 'https://' : 'http://';
             return proto + host;
         }
         return 'http://127.0.0.1';
@@ -136,60 +133,78 @@ module.exports = function (parent) {
         if (app._multideploy_registered) return;
         app._multideploy_registered = true;
 
-        // Middleware for checking MeshCentral user authentication for API calls
-        function requireAuth(req, res, next) {
-            var user = null;
-            if (req.session && req.session.userid) {
-                user = req.session.userid;
-            }
-            // Allow if session exists or if localhost
-            if (user || req.connection.remoteAddress === '127.0.0.1' || req.connection.remoteAddress === '::1') {
-                return next();
-            }
-            res.status(401).json({ error: 'Unauthorized' });
-        }
-
-        // 1. Get nodes & meshes list
-        app.get('/plugin/multideploy/api/nodes', requireAuth, function (req, res) {
+        // 1. Get nodes & meshes list from server database
+        app.get('/plugin/multideploy/api/nodes', function (req, res) {
             try {
-                obj.meshServer.db.GetAllType('node', function (err, nodes) {
-                    if (err || !nodes) return res.json({ meshes: [], nodes: [] });
-                    obj.meshServer.db.GetAllType('mesh', function (err2, meshes) {
-                        var wsagents = (obj.meshServer.webserver && obj.meshServer.webserver.wsagents) 
-                            ? obj.meshServer.webserver.wsagents 
-                            : obj.meshServer.wsagents;
+                var wsagents = (obj.meshServer.webserver && obj.meshServer.webserver.wsagents)
+                    ? obj.meshServer.webserver.wsagents
+                    : obj.meshServer.wsagents;
 
-                        var formattedNodes = nodes.map(function (n) {
-                            var isOnline = !!(wsagents && wsagents[n._id]);
-                            return {
-                                _id: n._id,
-                                name: n.name || n._id,
-                                meshid: n.meshid,
-                                os: n.os || 'Unknown',
-                                osdesc: n.osdesc || '',
-                                ip: n.ip || (wsagents && wsagents[n._id] ? wsagents[n._id].remoteAddress : ''),
-                                online: isOnline
-                            };
-                        });
-
-                        var formattedMeshes = (meshes || []).map(function (m) {
-                            return {
-                                _id: m._id,
-                                name: m.name || m._id,
-                                desc: m.desc || ''
-                            };
-                        });
-
-                        res.json({ meshes: formattedMeshes, nodes: formattedNodes });
+                function sendResult(rawNodes, rawMeshes) {
+                    var nodes = (rawNodes || []).map(function (doc) {
+                        var isOnline = !!(wsagents && wsagents[doc._id]);
+                        return {
+                            _id: doc._id,
+                            name: doc.name || doc._id,
+                            meshid: doc.meshid,
+                            os: doc.os || 'Unknown',
+                            osdesc: doc.osdesc || '',
+                            ip: doc.ip || (wsagents && wsagents[doc._id] ? wsagents[doc._id].remoteAddress : ''),
+                            online: isOnline
+                        };
                     });
-                });
+                    var meshes = (rawMeshes || []).map(function (doc) {
+                        return {
+                            _id: doc._id,
+                            name: doc.name || doc._id,
+                            desc: doc.desc || ''
+                        };
+                    });
+
+                    // Also supplement from active wsagents if node not in list
+                    if (wsagents) {
+                        var nodeMap = {};
+                        nodes.forEach(function (n) { nodeMap[n._id] = true; });
+                        for (var nid in wsagents) {
+                            if (!nodeMap[nid]) {
+                                var ag = wsagents[nid];
+                                nodes.push({
+                                    _id: nid,
+                                    name: (ag.node && ag.node.name) || nid,
+                                    meshid: (ag.node && ag.node.meshid) || '',
+                                    os: (ag.node && ag.node.os) || 'Unknown',
+                                    osdesc: '',
+                                    ip: ag.remoteAddress || '',
+                                    online: true
+                                });
+                            }
+                        }
+                    }
+
+                    res.json({ meshes: meshes, nodes: nodes });
+                }
+
+                if (obj.meshServer.db && typeof obj.meshServer.db.GetAllType === 'function') {
+                    obj.meshServer.db.GetAllType('node', function (nodesError, rawNodes) {
+                        obj.meshServer.db.GetAllType('mesh', function (meshesError, rawMeshes) {
+                            if (nodesError || meshesError) {
+                                console.log('[MultiDeploy] /api/nodes database error:', nodesError || meshesError);
+                            }
+                            sendResult(nodesError ? [] : rawNodes, meshesError ? [] : rawMeshes);
+                        });
+                    });
+                } else {
+                    console.log('[MultiDeploy] /api/nodes: MeshCentral database API GetAllType is unavailable.');
+                    sendResult([], []);
+                }
             } catch (e) {
-                res.status(500).json({ error: e.message });
+                console.log('[MultiDeploy] /api/nodes error:', e.message);
+                res.json({ meshes: [], nodes: [] });
             }
         });
 
-        // 2. Upload file to server (supports chunked JSON upload with zero dependencies)
-        app.post('/plugin/multideploy/api/upload', requireAuth, function (req, res) {
+        // 2. Upload file to server
+        app.post('/plugin/multideploy/api/upload', function (req, res) {
             var body = '';
             req.on('data', function (chunk) { body += chunk; });
             req.on('end', function () {
@@ -231,7 +246,7 @@ module.exports = function (parent) {
         });
 
         // 3. Start a deployment job
-        app.post('/plugin/multideploy/api/deploy', requireAuth, function (req, res) {
+        app.post('/plugin/multideploy/api/deploy', function (req, res) {
             var body = '';
             req.on('data', function (chunk) { body += chunk; });
             req.on('end', function () {
@@ -274,7 +289,6 @@ module.exports = function (parent) {
                         nodes: {}
                     };
 
-                    // Initialize target node entries
                     targetNodeIds.forEach(function (nodeId) {
                         var nodeToken = crypto.randomBytes(16).toString('hex');
                         job.nodes[nodeId] = {
@@ -282,7 +296,7 @@ module.exports = function (parent) {
                             name: params.nodeNames ? (params.nodeNames[nodeId] || nodeId) : nodeId,
                             os: params.nodeOS ? (params.nodeOS[nodeId] || 'Unknown') : 'Unknown',
                             token: nodeToken,
-                            status: 'queued', // queued, downloading, completed, failed
+                            status: 'queued',
                             progress: 0,
                             bytesTransferred: 0,
                             speed: 0,
@@ -294,7 +308,6 @@ module.exports = function (parent) {
 
                     activeJobs[jobId] = job;
 
-                    // Trigger deployment on each node
                     targetNodeIds.forEach(function (nodeId) {
                         dispatchNodeDeploy(job, nodeId, serverUrl);
                     });
@@ -307,11 +320,10 @@ module.exports = function (parent) {
         });
 
         // 4. Get active job status
-        app.get('/plugin/multideploy/api/job/:jobId', requireAuth, function (req, res) {
+        app.get('/plugin/multideploy/api/job/:jobId', function (req, res) {
             var jobId = req.params.jobId;
             var job = activeJobs[jobId];
             if (!job) {
-                // Check history
                 for (var i = 0; i < jobHistory.length; i++) {
                     if (jobHistory[i].jobId === jobId) {
                         return res.json(jobHistory[i]);
@@ -322,8 +334,8 @@ module.exports = function (parent) {
             res.json(job);
         });
 
-        // 5. Get list of all jobs (active + history)
-        app.get('/plugin/multideploy/api/jobs', requireAuth, function (req, res) {
+        // 5. Get list of all jobs
+        app.get('/plugin/multideploy/api/jobs', function (req, res) {
             var list = [];
             for (var j in activeJobs) {
                 list.push(activeJobs[j]);
@@ -336,7 +348,7 @@ module.exports = function (parent) {
         });
 
         // 6. Cancel a job
-        app.post('/plugin/multideploy/api/cancel/:jobId', requireAuth, function (req, res) {
+        app.post('/plugin/multideploy/api/cancel/:jobId', function (req, res) {
             var jobId = req.params.jobId;
             var job = activeJobs[jobId];
             if (!job) return res.status(404).json({ error: 'Задание не найдено' });
@@ -351,12 +363,11 @@ module.exports = function (parent) {
             res.json({ ok: true });
         });
 
-        // 7. Retry failed nodes in a job
-        app.post('/plugin/multideploy/api/retry/:jobId', requireAuth, function (req, res) {
+        // 7. Retry failed nodes
+        app.post('/plugin/multideploy/api/retry/:jobId', function (req, res) {
             var jobId = req.params.jobId;
             var job = activeJobs[jobId];
             if (!job) {
-                // Find in history
                 for (var i = 0; i < jobHistory.length; i++) {
                     if (jobHistory[i].jobId === jobId) {
                         job = JSON.parse(JSON.stringify(jobHistory[i]));
@@ -389,7 +400,7 @@ module.exports = function (parent) {
             res.json({ ok: true, retriedCount: retriedCount });
         });
 
-        // 8. Agent download endpoint (streams file & tracks bytes in real-time)
+        // 8. Agent download endpoint
         app.get('/plugin/multideploy/dl', function (req, res) {
             var jobId = req.query.job;
             var nodeId = req.query.node;
@@ -427,7 +438,6 @@ module.exports = function (parent) {
                 node.progress = totalSize > 0 ? Math.round((transferred / totalSize) * 100) : 100;
                 node.lastActivity = Date.now();
 
-                // Compute transfer speed every 500ms
                 var now = Date.now();
                 var diff = (now - lastTime) / 1000;
                 if (diff >= 0.5) {
@@ -461,7 +471,7 @@ module.exports = function (parent) {
                     var job = activeJobs[report.job];
                     if (job && job.nodes && job.nodes[report.node]) {
                         var node = job.nodes[report.node];
-                        node.status = report.status; // 'completed' or 'failed'
+                        node.status = report.status;
                         node.exitCode = report.exitCode !== undefined ? report.exitCode : null;
                         node.error = report.error || null;
                         node.lastActivity = Date.now();
@@ -469,7 +479,6 @@ module.exports = function (parent) {
                             node.progress = 100;
                         }
 
-                        // Check if all nodes in job have completed
                         var allDone = true;
                         for (var n in job.nodes) {
                             if (job.nodes[n].status === 'queued' || job.nodes[n].status === 'downloading') {
@@ -505,11 +514,9 @@ module.exports = function (parent) {
         var destPath = job.destPath;
         var fileName = job.fileName;
 
-        // Smart destination path formatting
         if (!destPath || destPath.trim() === '') {
             destPath = isWindows ? ('C:\\Temp\\' + fileName) : ('/tmp/' + fileName);
         } else {
-            // If path ends with slash, append filename
             if (destPath.endsWith('\\') || destPath.endsWith('/')) {
                 destPath += fileName;
             }
@@ -523,7 +530,6 @@ module.exports = function (parent) {
         var cmdString = '';
 
         if (isWindows) {
-            // Robust PowerShell script with self-signed SSL bypass, folder creation, WebClient download, and report
             var psScript = [
                 "$ErrorActionPreference = 'Stop';",
                 "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;",
@@ -550,7 +556,6 @@ module.exports = function (parent) {
 
             cmdString = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + psScript.replace(/"/g, '\\"') + '"';
         } else {
-            // Linux / macOS Bash command with curl/wget fallback
             var safeDest = destPath.replace(/"/g, '\\"');
             cmdString = [
                 'dest="' + safeDest + '";',
@@ -568,7 +573,6 @@ module.exports = function (parent) {
             ].join(' ');
         }
 
-        // Send agent command
         try {
             var msg = JSON.stringify({
                 action: 'runcommands',
@@ -615,11 +619,9 @@ module.exports = function (parent) {
         if (window._multideploy_injected) return;
         window._multideploy_injected = true;
 
-        // 1. Inject Styles
         var css = document.createElement('style');
         css.id = 'multideploy-styles';
         css.innerHTML = `
-            /* MultiDeploy Modal & Controls */
             #multideploy-btn {
                 background: linear-gradient(135deg, #10b981 0%, #059669 100%);
                 color: #ffffff !important;
@@ -654,7 +656,7 @@ module.exports = function (parent) {
             .md-modal {
                 background: #1e293b;
                 color: #f1f5f9;
-                width: 900px;
+                width: 920px;
                 max-width: 95vw;
                 max-height: 90vh;
                 border-radius: 12px;
@@ -748,7 +750,7 @@ module.exports = function (parent) {
             }
             .md-input:focus, .md-select:focus { border-color: #38bdf8; }
             .md-nodes-table-wrap {
-                max-height: 180px;
+                max-height: 200px;
                 overflow-y: auto;
                 border: 1px solid #334155;
                 border-radius: 6px;
@@ -823,17 +825,11 @@ module.exports = function (parent) {
                 transition: all 0.2s;
             }
             .md-btn:hover { background: #1d4ed8; }
-            .md-btn-success {
-                background: #10b981;
-            }
+            .md-btn-success { background: #10b981; }
             .md-btn-success:hover { background: #059669; }
-            .md-btn-danger {
-                background: #ef4444;
-            }
+            .md-btn-danger { background: #ef4444; }
             .md-btn-danger:hover { background: #dc2626; }
-            .md-btn-secondary {
-                background: #475569;
-            }
+            .md-btn-secondary { background: #475569; }
             .md-btn-secondary:hover { background: #334155; }
             .md-footer {
                 display: flex;
@@ -846,7 +842,6 @@ module.exports = function (parent) {
         `;
         document.head.appendChild(css);
 
-        // 2. Add Button to MeshCentral Top Bar / Buttons Bar
         function injectDeployButton() {
             if (document.getElementById('multideploy-btn')) return;
             var targetBar = document.getElementById('devicesButtonBar') 
@@ -875,7 +870,6 @@ module.exports = function (parent) {
         injectDeployButton();
         setInterval(injectDeployButton, 3000);
 
-        // 3. Define the Plugin Client Controller
         window.MultiDeployPlugin = {
             nodes: [],
             meshes: [],
@@ -884,6 +878,161 @@ module.exports = function (parent) {
             activeJobId: null,
             pollTimer: null,
             currentTab: 'new',
+
+            // Read nodes directly from MeshCentral frontend in-memory state
+            getNodesFromBrowser: function () {
+                var resultNodes = [];
+                var resultMeshes = [];
+                var nodeMap = {};
+
+                function addNode(n, fallbackMeshId) {
+                    if (!n) return;
+                    var nid = n._id || n.nodeid || n.id;
+                    if (!nid || nodeMap[nid]) return;
+                    nodeMap[nid] = true;
+
+                    var isOnline = false;
+                    if (typeof n.conn === 'number') {
+                        isOnline = (n.conn & 1) !== 0 || (n.conn & 3) !== 0;
+                    } else if (n.connected !== undefined) {
+                        isOnline = !!n.connected;
+                    } else if (n.online !== undefined) {
+                        isOnline = !!n.online;
+                    } else if (n.connecttime && !n.disconnecttime) {
+                        isOnline = true;
+                    }
+
+                    var osStr = n.os || (n.agent && n.agent.os) || '';
+                    if (!osStr && n.desc) {
+                        var d = n.desc.toLowerCase();
+                        if (d.indexOf('win') !== -1) osStr = 'Windows';
+                        else if (d.indexOf('linux') !== -1 || d.indexOf('ubuntu') !== -1) osStr = 'Linux';
+                    }
+
+                    resultNodes.push({
+                        _id: nid,
+                        name: n.name || nid,
+                        meshid: n.meshid || fallbackMeshId || '',
+                        os: osStr || 'Unknown',
+                        osdesc: n.osdesc || n.desc || '',
+                        ip: n.ip || (n.netif && n.netif[0] ? n.netif[0] : '') || '',
+                        online: isOnline
+                    });
+                }
+
+                // 1. Check window.meshes / window.meshserver.meshes
+                var rawMeshes = window.meshes || (window.meshserver && window.meshserver.meshes);
+                if (rawMeshes) {
+                    if (Array.isArray(rawMeshes)) {
+                        rawMeshes.forEach(function (m) {
+                            if (m && (m._id || m.id)) {
+                                resultMeshes.push({ _id: m._id || m.id, name: m.name || m._id });
+                            }
+                        });
+                    } else if (typeof rawMeshes === 'object') {
+                        for (var mid in rawMeshes) {
+                            var mObj = rawMeshes[mid];
+                            if (mObj && typeof mObj === 'object') {
+                                resultMeshes.push({ _id: mObj._id || mid, name: mObj.name || mid });
+                            }
+                        }
+                    }
+                }
+
+                // 2. Check window.nodes / window.meshserver.nodes
+                var rawNodes = window.nodes || (window.meshserver && window.meshserver.nodes);
+                if (rawNodes) {
+                    if (Array.isArray(rawNodes)) {
+                        rawNodes.forEach(function (n) { addNode(n); });
+                    } else if (typeof rawNodes === 'object') {
+                        for (var k in rawNodes) {
+                            var val = rawNodes[k];
+                            if (Array.isArray(val)) {
+                                val.forEach(function (sub) { addNode(sub, k); });
+                            } else if (val && typeof val === 'object') {
+                                if (val._id && String(val._id).indexOf('node//') === 0) {
+                                    addNode(val, val.meshid || k);
+                                } else {
+                                    for (var subk in val) {
+                                        var subval = val[subk];
+                                        if (subval && typeof subval === 'object') {
+                                            addNode(subval, k);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3. Fallback: Parse from MeshCentral devices tree DOM if nodes object not exposed
+                if (resultNodes.length === 0) {
+                    try {
+                        var nodeElements = document.querySelectorAll('[id^="d_node//"], [id^="node//"], [onclick*="node//"]');
+                        nodeElements.forEach(function (el) {
+                            var id = el.id ? el.id.replace(/^d_/, '') : '';
+                            if (!id && el.getAttribute('onclick')) {
+                                var match = el.getAttribute('onclick').match(/node\/\/[a-zA-Z0-9_\$]+/);
+                                if (match) id = match[0];
+                            }
+                            if (id && !nodeMap[id]) {
+                                var name = el.innerText.trim().split('\n')[0] || id;
+                                addNode({ _id: id, name: name, conn: 1 });
+                            }
+                        });
+                    } catch (e) {}
+                }
+
+                return { nodes: resultNodes, meshes: resultMeshes };
+            },
+
+            loadNodes: function (cb) {
+                var self = this;
+
+                // Step 1: Immediately read from browser's live MeshCentral memory
+                var local = self.getNodesFromBrowser();
+                if (local.nodes && local.nodes.length > 0) {
+                    self.nodes = local.nodes;
+                    self.meshes = local.meshes;
+                    if (cb) { cb(); cb = null; }
+                }
+
+                // Step 2: Query plugin backend API in background to merge any missing nodes
+                fetch('/plugin/multideploy/api/nodes')
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (data && data.nodes && data.nodes.length > 0) {
+                            var map = {};
+                            self.nodes.forEach(function (n) { map[n._id] = n; });
+
+                            data.nodes.forEach(function (n) {
+                                if (!map[n._id]) {
+                                    self.nodes.push(n);
+                                } else {
+                                    map[n._id].online = n.online;
+                                    if (n.ip && !map[n._id].ip) map[n._id].ip = n.ip;
+                                    if (n.os && map[n._id].os === 'Unknown') map[n._id].os = n.os;
+                                }
+                            });
+
+                            if (data.meshes && data.meshes.length > 0) {
+                                var mMap = {};
+                                self.meshes.forEach(function (m) { mMap[m._id] = true; });
+                                data.meshes.forEach(function (m) {
+                                    if (!mMap[m._id]) self.meshes.push(m);
+                                });
+                            }
+                        }
+
+                        if (cb) cb();
+                        self.filterNodes();
+                    })
+                    .catch(function (e) {
+                        console.warn('[MultiDeploy] /api/nodes fetch:', e);
+                        if (cb) cb();
+                        self.filterNodes();
+                    });
+            },
 
             openModal: function () {
                 var self = this;
@@ -905,11 +1054,12 @@ module.exports = function (parent) {
                             <div class="md-tab" id="md-tab-history" onclick="window.MultiDeployPlugin.switchTab('history')">История отправок</div>
                         </div>
                         <div class="md-content" id="md-content-body">
-                            <!-- Populated dynamically -->
+                            <div style="text-align: center; padding: 40px; color: #94a3b8;">
+                                <div style="font-size: 24px; margin-bottom: 8px;">⏳</div>
+                                <div>Загрузка списка компьютеров...</div>
+                            </div>
                         </div>
-                        <div class="md-footer" id="md-footer-controls">
-                            <!-- Footer actions -->
-                        </div>
+                        <div class="md-footer" id="md-footer-controls"></div>
                     </div>
                 `;
                 document.body.appendChild(overlay);
@@ -936,21 +1086,6 @@ module.exports = function (parent) {
                 else if (tab === 'history') this.renderHistoryTab();
             },
 
-            loadNodes: function (cb) {
-                var self = this;
-                fetch('/plugin/multideploy/api/nodes')
-                    .then(function (r) { return r.json(); })
-                    .then(function (data) {
-                        self.nodes = data.nodes || [];
-                        self.meshes = data.meshes || [];
-                        if (cb) cb();
-                    })
-                    .catch(function (e) {
-                        console.error('Failed to load nodes:', e);
-                        if (cb) cb();
-                    });
-            },
-
             renderNewTab: function () {
                 var self = this;
                 var body = document.getElementById('md-content-body');
@@ -971,6 +1106,7 @@ module.exports = function (parent) {
                             <input type="text" id="md-search-filter" class="md-input" placeholder="Поиск по имени или IP..." style="flex: 1;" oninput="window.MultiDeployPlugin.filterNodes()">
                             <button class="md-btn md-btn-secondary" onclick="window.MultiDeployPlugin.selectAllOnline()">Только в сети</button>
                             <button class="md-btn md-btn-secondary" onclick="window.MultiDeployPlugin.toggleSelectAll()">Все</button>
+                            <button class="md-btn md-btn-secondary" title="Обновить список компьютеров" onclick="window.MultiDeployPlugin.loadNodes(function(){ window.MultiDeployPlugin.filterNodes(); })">🔄</button>
                         </div>
                         <div class="md-nodes-table-wrap">
                             <table class="md-table">
@@ -1082,7 +1218,6 @@ module.exports = function (parent) {
                     </div>
                 `;
 
-                // Chunked upload in 2MB slices
                 var chunkSize = 2 * 1024 * 1024;
                 var totalChunks = Math.ceil(file.size / chunkSize) || 1;
                 var currentChunk = 0;
@@ -1153,7 +1288,7 @@ module.exports = function (parent) {
                 var visibleCount = 0;
 
                 self.nodes.forEach(function (n) {
-                    if (meshFilter !== 'all' && n.meshid !== meshFilter) return;
+                    if (meshFilter !== 'all' && n.meshid && n.meshid !== meshFilter) return;
                     if (searchFilter) {
                         var text = (n.name + ' ' + (n.ip || '') + ' ' + (n.os || '')).toLowerCase();
                         if (text.indexOf(searchFilter) === -1) return;
@@ -1166,9 +1301,10 @@ module.exports = function (parent) {
                         : '<span class="md-badge md-badge-offline">Не в сети</span>';
 
                     var osIcon = '💻';
-                    if (n.os && n.os.toLowerCase().indexOf('win') !== -1) osIcon = '🪟';
-                    else if (n.os && n.os.toLowerCase().indexOf('linux') !== -1) osIcon = '🐧';
-                    else if (n.os && n.os.toLowerCase().indexOf('mac') !== -1) osIcon = '🍎';
+                    var osLow = (n.os || '').toLowerCase();
+                    if (osLow.indexOf('win') !== -1) osIcon = '🪟';
+                    else if (osLow.indexOf('linux') !== -1 || osLow.indexOf('ubuntu') !== -1) osIcon = '🐧';
+                    else if (osLow.indexOf('mac') !== -1) osIcon = '🍎';
 
                     html += `
                         <tr>
@@ -1182,7 +1318,7 @@ module.exports = function (parent) {
                 });
 
                 if (visibleCount === 0) {
-                    html = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Компьютеры не найдены</td></tr>';
+                    html = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 20px;">Компьютеры не найдены (нажмите 🔄 для обновления)</td></tr>';
                 }
 
                 tbody.innerHTML = html;
@@ -1469,7 +1605,6 @@ module.exports = function (parent) {
 
                 if (tbody) tbody.innerHTML = rowsHtml;
 
-                // Update Stats
                 var overallPct = totalBytesTarget > 0 ? Math.round((totalBytesDone / totalBytesTarget) * 100) : 0;
                 if (successCount === job.totalCount) overallPct = 100;
 
@@ -1599,7 +1734,7 @@ module.exports = function (parent) {
         };
     };
 
-    // Device refresh hook (populates tab when a device is clicked in MeshCentral)
+    // Device refresh hook
     obj.onDeviceRefreshEnd = function () {
         var tabContainer = document.getElementById('multideployTab') || document.getElementById('pmultideployTab');
         if (!tabContainer || tabContainer._multideploy_ready) return;
