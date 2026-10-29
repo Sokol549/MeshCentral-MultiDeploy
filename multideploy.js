@@ -1192,8 +1192,8 @@ module.exports = function (parent) {
                         <div class="md-section-title">3. Параметры назначения и выполнения</div>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
                             <div>
-                                <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Путь назначения на клиенте:</label>
-                                <input type="text" id="md-dest-path" class="md-input" style="width: 95%;" placeholder="По умолчанию: C:\\Temp\\ или /tmp/" onclick="event.stopPropagation(); this.focus();" onkeydown="event.stopPropagation();" onkeypress="event.stopPropagation();" onkeyup="event.stopPropagation();">
+                                <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Папка назначения на клиенте:</label>
+                                <input type="text" id="md-dest-path" class="md-input" style="width: 95%;" placeholder="Например: C:\\Dahua или /opt/files" onclick="event.stopPropagation(); this.focus();" onkeydown="event.stopPropagation();" onkeypress="event.stopPropagation();" onkeyup="event.stopPropagation();">
                             </div>
                             <div>
                                 <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Аргументы запуска (если запуск включен):</label>
@@ -1614,12 +1614,16 @@ module.exports = function (parent) {
             getNativeTarget: function (job, node) {
                 var platform = ((node.os || '') + ' ' + (node.osdesc || '')).toLowerCase();
                 var isWindows = platform.indexOf('win') !== -1 || platform.indexOf('виндов') !== -1 || platform.indexOf('майкрософт') !== -1;
-                var target = (job.destPath || '').trim();
-                if (!target) target = isWindows ? ('C:\\Temp\\' + job.fileName) : ('/tmp/' + job.fileName);
-                if (target.endsWith('\\') || target.endsWith('/')) target += job.fileName;
-                target = target.replace(/\\/g, '/');
-                var slash = target.lastIndexOf('/');
-                return { directory: slash >= 0 ? target.substring(0, slash) : '.', name: slash >= 0 ? target.substring(slash + 1) : target, fullPath: target, isWindows: isWindows };
+                var directory = (job.destPath || '').trim();
+                if (!directory) directory = isWindows ? 'C:\\Temp' : '/tmp';
+                // The destination control represents a folder, never a filename.
+                // Convert Windows separators for the MeshCentral file protocol, then
+                // append the original selected filename for every batch item.
+                if (isWindows) directory = directory.replace(/\\/g, '/');
+                if (isWindows && /^[A-Za-z]:\/?$/.test(directory)) directory = directory.substring(0, 2) + '/';
+                else if (directory !== '/') directory = directory.replace(/[\\/]+$/, '');
+                var fullPath = directory + (directory.endsWith('/') ? '' : '/') + job.fileName;
+                return { directory: directory, name: job.fileName, fullPath: fullPath, isWindows: isWindows };
             },
 
             sendNativeFile: function (job, nodeId) {
