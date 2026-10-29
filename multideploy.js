@@ -1525,6 +1525,7 @@ module.exports = function (parent) {
                 var self = this;
                 var job = {
                     jobId: 'native_' + Date.now(),
+                    startTime: Date.now(),
                     files: self.uploadedFiles || [self.uploadedFile.file],
                     fileIndex: 0,
                     file: (self.uploadedFiles || [self.uploadedFile.file])[0],
@@ -1563,6 +1564,7 @@ module.exports = function (parent) {
                             }
                         }
                         job.status = 'cancelled';
+                        self.storeNativeHistory(job);
                         self.updateMonitorUI(job);
                         return;
                     }
@@ -1604,6 +1606,7 @@ module.exports = function (parent) {
                             setTimeout(schedule, 0);
                         } else {
                             job.status = 'completed';
+                            self.storeNativeHistory(job);
                         }
                     }
                     self.updateMonitorUI(job);
@@ -1995,6 +1998,37 @@ module.exports = function (parent) {
                     .then(function () { self.startMonitoring(); });
             },
 
+            getNativeHistory: function () {
+                try { return JSON.parse(localStorage.getItem('multideploy-native-history') || '[]'); } catch (e) { return []; }
+            },
+
+            storeNativeHistory: function (job) {
+                if (job.historyStored) return;
+                job.historyStored = true;
+                var successful = 0, failed = 0;
+                for (var nodeId in job.nodes) {
+                    if (job.nodes[nodeId].status === 'completed') successful++;
+                    else failed++;
+                }
+                var entry = {
+                    jobId: job.jobId,
+                    startTime: job.startTime || Date.now(),
+                    endTime: Date.now(),
+                    fileName: job.files && job.files.length > 1 ? (job.files.length + ' файлов') : job.fileName,
+                    fileNames: job.files ? job.files.map(function (file) { return file.name; }) : [job.fileName],
+                    fileSize: job.fileSize,
+                    totalCount: job.totalCount,
+                    successCount: successful,
+                    failCount: failed,
+                    status: failed === 0 ? 'completed' : (successful === 0 ? 'failed' : 'partial'),
+                    destPath: job.destPath,
+                    nodes: JSON.parse(JSON.stringify(job.nodes))
+                };
+                var history = this.getNativeHistory();
+                history.unshift(entry);
+                localStorage.setItem('multideploy-native-history', JSON.stringify(history.slice(0, 100)));
+            },
+
             renderHistoryTab: function () {
                 var self = this;
                 var body = document.getElementById('md-content-body');
@@ -2028,9 +2062,8 @@ module.exports = function (parent) {
                     <button class="md-btn md-btn-secondary" onclick="window.MultiDeployPlugin.switchTab('new')">➕ Новая отправка</button>
                 `;
 
-                fetch('/plugin/multideploy/api/jobs')
-                    .then(function (r) { return r.json(); })
-                    .then(function (jobs) {
+                var jobs = self.getNativeHistory();
+                (function () {
                         var tbody = document.getElementById('md-history-tbody');
                         if (!tbody) return;
 
@@ -2062,10 +2095,17 @@ module.exports = function (parent) {
                             `;
                         });
                         tbody.innerHTML = html;
-                    });
+                    })();
             },
 
             viewHistoryDetails: function (jobId) {
+                var history = this.getNativeHistory();
+                for (var i = 0; i < history.length; i++) {
+                    if (history[i].jobId === jobId) {
+                        this.nativeJob = history[i];
+                        break;
+                    }
+                }
                 this.activeJobId = jobId;
                 this.switchTab('monitor');
             },
