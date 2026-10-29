@@ -899,6 +899,8 @@ module.exports = function (parent) {
             selectedNodes: {},
             uploadedFile: null,
             activeJobId: null,
+            nativeJob: null,
+            nativeTransfers: {},
             pollTimer: null,
             currentTab: 'new',
             nodeLoadError: null,
@@ -1239,6 +1241,20 @@ module.exports = function (parent) {
                 var file = files[0];
 
                 var infoEl = document.getElementById('md-file-info');
+                // Keep the file in the browser. It will be sent directly to every
+                // selected MeshCentral agent using its built-in file channel.
+                self.uploadedFile = {
+                    file: file,
+                    fileName: file.name,
+                    fileSize: file.size
+                };
+                infoEl.innerHTML = `
+                    <div style="font-size: 20px; color: #34d399; margin-bottom: 4px;">✅ Файл готов к отправке</div>
+                    <div style="font-weight: 600; font-size: 14px;">${file.name}</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">Размер: ${self.formatBytes(file.size)}. Передача начнётся после выбора компьютеров.</div>
+                `;
+                return;
+
                 infoEl.innerHTML = `
                     <div style="font-size: 20px; color: #38bdf8; margin-bottom: 4px;">⏳ Загрузка на сервер MeshCentral...</div>
                     <div style="font-size: 13px;">${file.name} (${self.formatBytes(file.size)})</div>
@@ -1420,6 +1436,8 @@ module.exports = function (parent) {
                 var runArgs = document.getElementById('md-run-args').value;
                 var overwrite = document.getElementById('md-overwrite-cb').checked;
 
+                return self.startNativeJob(targetIds, destPath, runAfter, runArgs, overwrite);
+
                 var nodeNames = {};
                 var nodeOS = {};
                 self.nodes.forEach(function (n) {
@@ -1471,6 +1489,163 @@ module.exports = function (parent) {
                         startBtn.innerText = '🚀 Начать отправку';
                     }
                 });
+            },
+
+            startNativeJob: function (targetIds, destPath, runAfter, runArgs, overwrite) {
+                var self = this;
+                var job = {
+                    jobId: 'native_' + Date.now(),
+                    file: self.uploadedFile.file,
+                    fileName: self.uploadedFile.fileName,
+                    fileSize: self.uploadedFile.fileSize,
+                    destPath: destPath,
+                    runAfter: runAfter,
+                    runArgs: runArgs,
+                    overwrite: overwrite,
+                    totalCount: targetIds.length,
+                    status: 'in_progress',
+                    cancelled: false,
+                    nodes: {}
+                };
+                self.nodes.forEach(function (node) {
+                    if (targetIds.indexOf(node._id) >= 0) {
+                        job.nodes[node._id] = { nodeId: node._id, name: node.name || node._id, os: node.os || '', status: 'queued', progress: 0, bytesTransferred: 0, speed: 0, error: null, exitCode: null };
+                    }
+                });
+                self.nativeJob = job;
+                self.activeJobId = job.jobId;
+                self.switchTab('monitor');
+                self.startNativeDeployment(job);
+            },
+
+            startNativeDeployment: function (job) {
+                var self = this;
+                function next() {
+                    if (job.cancelled) {
+                        for (var cancelledId in job.nodes) {
+                            if (job.nodes[cancelledId].status === 'queued' || job.nodes[cancelledId].status === 'downloading') {
+                                job.nodes[cancelledId].status = 'failed';
+                                job.nodes[cancelledId].error = 'Отменено пользователем';
+                            }
+                        }
+                        job.status = 'cancelled';
+                        self.updateMonitorUI(job);
+                        return;
+                    }
+                    var nodeId = null;
+                    for (var id in job.nodes) { if (job.nodes[id].status === 'queued') { nodeId = id; break; } }
+                    if (!nodeId) {
+                        job.status = 'completed';
+                        self.updateMonitorUI(job);
+                        return;
+                    }
+                    var node = job.nodes[nodeId];
+                    node.status = 'downloading';
+                    self.updateMonitorUI(job);
+                    self.sendNativeFile(job, nodeId).then(function () {
+                        node.status = 'completed';
+                        node.progress = 100;
+                        node.bytesTransferred = job.fileSize;
+                        if (job.runAfter) self.runNativeFile(job, nodeId);
+                    }).catch(function (error) {
+                        node.status = 'failed';
+                        node.error = error.message || String(error);
+                    }).then(function () {
+                        self.updateMonitorUI(job);
+                        next();
+                    });
+                }
+                next();
+            },
+
+            getNativeTarget: function (job, node) {
+                var isWindows = (node.os || '').toLowerCase().indexOf('win') !== -1;
+                var target = (job.destPath || '').trim();
+                if (!target) target = isWindows ? ('C:\\Temp\\' + job.fileName) : ('/tmp/' + job.fileName);
+                if (target.endsWith('\\') || target.endsWith('/')) target += job.fileName;
+                target = target.replace(/\\/g, '/');
+                var slash = target.lastIndexOf('/');
+                return { directory: slash >= 0 ? target.substring(0, slash) : '.', name: slash >= 0 ? target.substring(slash + 1) : target, fullPath: target, isWindows: isWindows };
+            },
+
+            sendNativeFile: function (job, nodeId) {
+                var self = this;
+                var node = job.nodes[nodeId];
+                var target = self.getNativeTarget(job, node);
+                return new Promise(function (resolve, reject) {
+                    if (typeof CreateAgentRedirect !== 'function' || typeof CreateRemoteFiles !== 'function') {
+                        reject(new Error('Встроенный файловый канал MeshCentral недоступен в этом интерфейсе'));
+                        return;
+                    }
+                    self.ensureNativeDirectory(nodeId, target).then(function () {
+                        var redirect, offset = 0, complete = false, settled = false, readerBusy = false;
+                        var timeout = setTimeout(function () { finish(new Error('Таймаут подключения к файловому каналу')); }, 30000);
+                        function finish(error) {
+                            if (settled) return;
+                            settled = true;
+                            clearTimeout(timeout);
+                            delete self.nativeTransfers[nodeId];
+                            try { if (redirect) redirect.Stop(); } catch (e) {}
+                            if (error) reject(error); else resolve();
+                        }
+                        function sendText(message) { redirect.sendText(JSON.stringify(message)); }
+                        function sendNext() {
+                            if (settled || readerBusy) return;
+                            if (offset >= job.fileSize) {
+                                if (!complete) { complete = true; sendText({ action: 'uploaddone', reqid: 1 }); }
+                                return;
+                            }
+                            readerBusy = true;
+                            var end = Math.min(offset + 65536, job.fileSize);
+                            var reader = new FileReader();
+                            reader.onerror = function () { finish(new Error('Не удалось прочитать выбранный файл')); };
+                            reader.onload = function () {
+                                readerBusy = false;
+                                var bytes = new Uint8Array(reader.result);
+                                if (bytes.length && (bytes[0] === 0 || bytes[0] === 123)) {
+                                    var framed = new Uint8Array(bytes.length + 1);
+                                    framed.set(bytes, 1);
+                                    redirect.send(framed);
+                                } else { redirect.send(bytes); }
+                                offset = end;
+                                node.bytesTransferred = offset;
+                                node.progress = Math.round((offset / job.fileSize) * 100);
+                                self.updateMonitorUI(job);
+                            };
+                            reader.readAsArrayBuffer(job.file.slice(offset, end));
+                        }
+                        function onMessage(data) {
+                            var message = data;
+                            try { if (typeof data === 'string') message = JSON.parse(data); } catch (e) { return; }
+                            if (!message || parseInt(message.reqid) !== 1) return;
+                            if (message.action === 'uploadstart' || message.action === 'uploadack') sendNext();
+                            else if (message.action === 'uploaddone') finish();
+                            else if (message.action === 'uploaderror') finish(new Error('Агент не смог записать файл в ' + target.directory));
+                        }
+                        var filesProtocol = CreateRemoteFiles(onMessage);
+                        redirect = CreateAgentRedirect(meshserver, filesProtocol, serverPublicNamePort, authCookie, authRelayCookie, domainUrl);
+                        self.nativeTransfers[nodeId] = redirect;
+                        redirect.onStateChanged = function (x, state) {
+                            if (state === 3) sendText({ action: 'upload', reqid: 1, path: target.directory, name: target.name, size: job.fileSize });
+                            else if (state === 0 && offset > 0) finish(new Error('Файловый канал был отключён'));
+                        };
+                        try { redirect.Start(nodeId); } catch (e) { finish(e); }
+                    }).catch(reject);
+                });
+            },
+
+            ensureNativeDirectory: function (nodeId, target) {
+                return new Promise(function (resolve) {
+                    var command = target.isWindows ? "powershell -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory -Force -Path '" + target.directory.replace(/'/g, "''") + "' | Out-Null\"" : "mkdir -p '" + target.directory.replace(/'/g, "'\\''") + "'";
+                    try { meshserver.send({ action: 'runcommands', nodeids: [nodeId], type: 3, runAsUser: 0, cmds: command }); } catch (e) {}
+                    setTimeout(resolve, 800);
+                });
+            },
+
+            runNativeFile: function (job, nodeId) {
+                var target = this.getNativeTarget(job, job.nodes[nodeId]);
+                var command = target.isWindows ? "powershell -NoProfile -NonInteractive -Command \"Start-Process -FilePath '" + target.fullPath.replace(/'/g, "''") + "' -ArgumentList '" + (job.runArgs || '').replace(/'/g, "''") + "'\"" : "chmod +x '" + target.fullPath.replace(/'/g, "'\\''") + "'; '" + target.fullPath.replace(/'/g, "'\\''") + "' " + (job.runArgs || '');
+                try { meshserver.send({ action: 'runcommands', nodeids: [nodeId], type: 3, runAsUser: 0, cmds: command }); } catch (e) {}
             },
 
             renderMonitorTab: function () {
@@ -1563,6 +1738,10 @@ module.exports = function (parent) {
             startMonitoring: function () {
                 var self = this;
                 if (self.pollTimer) clearInterval(self.pollTimer);
+                if (self.nativeJob && self.nativeJob.jobId === self.activeJobId) {
+                    self.updateMonitorUI(self.nativeJob);
+                    return;
+                }
 
                 function poll() {
                     if (!self.activeJobId || self.currentTab !== 'monitor') return;
@@ -1667,6 +1846,14 @@ module.exports = function (parent) {
                 var self = this;
                 if (!self.activeJobId) return;
                 if (!confirm('Отменить отправку на оставшиеся компьютеры?')) return;
+                if (self.nativeJob && self.nativeJob.jobId === self.activeJobId) {
+                    self.nativeJob.cancelled = true;
+                    for (var nodeId in self.nativeTransfers) {
+                        try { self.nativeTransfers[nodeId].Stop(); } catch (e) {}
+                    }
+                    self.nativeTransfers = {};
+                    return;
+                }
                 fetch('/plugin/multideploy/api/cancel/' + self.activeJobId, { method: 'POST' })
                     .then(function () { self.startMonitoring(); });
             },
@@ -1674,6 +1861,17 @@ module.exports = function (parent) {
             retryFailedCurrentJob: function () {
                 var self = this;
                 if (!self.activeJobId) return;
+                if (self.nativeJob && self.nativeJob.jobId === self.activeJobId) {
+                    var hasFailed = false;
+                    for (var nodeId in self.nativeJob.nodes) {
+                        var node = self.nativeJob.nodes[nodeId];
+                        if (node.status === 'failed') {
+                            node.status = 'queued'; node.progress = 0; node.bytesTransferred = 0; node.error = null; hasFailed = true;
+                        }
+                    }
+                    if (hasFailed) { self.nativeJob.cancelled = false; self.nativeJob.status = 'in_progress'; self.startNativeDeployment(self.nativeJob); }
+                    return;
+                }
                 fetch('/plugin/multideploy/api/retry/' + self.activeJobId, { method: 'POST' })
                     .then(function () { self.startMonitoring(); });
             },
