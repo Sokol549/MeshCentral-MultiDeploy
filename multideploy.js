@@ -628,25 +628,7 @@ module.exports = function (parent) {
         css.id = 'multideploy-styles';
         css.innerHTML = `
             #multideploy-btn {
-                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-                color: #ffffff !important;
-                font-weight: 600;
-                border-radius: 6px;
-                padding: 6px 12px;
-                border: none;
-                cursor: pointer;
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                font-size: 13px;
-                transition: all 0.2s ease;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.15);
-                margin: 4px;
-            }
-            #multideploy-btn:hover {
-                background: linear-gradient(135deg, #059669 0%, #047857 100%);
-                transform: translateY(-1px);
-                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                margin-left: 4px;
             }
             .md-modal-overlay {
                 position: fixed;
@@ -849,25 +831,26 @@ module.exports = function (parent) {
 
         function injectDeployButton() {
             if (document.getElementById('multideploy-btn')) return;
-            var targetBar = document.getElementById('devicesButtonBar') 
+            var groupActionButton = document.getElementById('GroupActionButton');
+            var targetBar = document.getElementById('devListToolbar')
+                || document.getElementById('devicesButtonBar')
                 || document.getElementById('navigationHeader')
-                || document.querySelector('.page-header')
-                || document.body;
+                || document.querySelector('.page-header');
 
-            var btn = document.createElement('button');
+            // Use an input button so MeshCentral applies its native toolbar styling.
+            if (!targetBar) return;
+
+            var btn = document.createElement('input');
             btn.id = 'multideploy-btn';
-            btn.innerHTML = '📤 Массовая отправка файлов';
+            btn.type = 'button';
+            btn.value = 'Массовая отправка файлов';
             btn.title = 'Отправить файл на несколько компьютеров одновременно';
             btn.onclick = function () {
                 window.MultiDeployPlugin.openModal();
             };
 
-            if (targetBar === document.body) {
-                btn.style.position = 'fixed';
-                btn.style.bottom = '20px';
-                btn.style.right = '20px';
-                btn.style.zIndex = '9999';
-                document.body.appendChild(btn);
+            if (groupActionButton && groupActionButton.parentNode === targetBar) {
+                targetBar.insertBefore(btn, groupActionButton.nextSibling);
             } else {
                 targetBar.appendChild(btn);
             }
