@@ -1199,6 +1199,10 @@ module.exports = function (parent) {
                                 <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Аргументы запуска (если запуск включен):</label>
                                 <input type="text" id="md-run-args" class="md-input" style="width: 95%;" placeholder="Например: /quiet /norestart или --silent" onclick="event.stopPropagation(); this.focus();" onkeydown="event.stopPropagation();" onkeypress="event.stopPropagation();" onkeyup="event.stopPropagation();">
                             </div>
+                            <div>
+                                <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Параллельных передач:</label>
+                                <select id="md-concurrency" class="md-select" style="width: 100%;"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="5">5</option><option value="10">10</option></select>
+                            </div>
                         </div>
                         <div style="display: flex; gap: 20px; font-size: 13px;">
                             <label style="cursor: pointer; display: flex; align-items: center; gap: 6px;">
@@ -1458,8 +1462,9 @@ module.exports = function (parent) {
                 var runAfter = document.getElementById('md-run-after-cb').checked;
                 var runArgs = document.getElementById('md-run-args').value;
                 var overwrite = document.getElementById('md-overwrite-cb').checked;
+                var concurrency = parseInt(document.getElementById('md-concurrency').value) || 1;
 
-                return self.startNativeJob(targetIds, destPath, runAfter, runArgs, overwrite);
+                return self.startNativeJob(targetIds, destPath, runAfter, runArgs, overwrite, concurrency);
 
                 var nodeNames = {};
                 var nodeOS = {};
@@ -1514,7 +1519,7 @@ module.exports = function (parent) {
                 });
             },
 
-            startNativeJob: function (targetIds, destPath, runAfter, runArgs, overwrite) {
+            startNativeJob: function (targetIds, destPath, runAfter, runArgs, overwrite, concurrency) {
                 var self = this;
                 var job = {
                     jobId: 'native_' + Date.now(),
@@ -1525,6 +1530,8 @@ module.exports = function (parent) {
                     runAfter: runAfter,
                     runArgs: runArgs,
                     overwrite: overwrite,
+                    maxConcurrent: Math.max(1, Math.min(concurrency, 10)),
+                    activeTransfers: 0,
                     totalCount: targetIds.length,
                     status: 'in_progress',
                     cancelled: false,
@@ -1543,7 +1550,7 @@ module.exports = function (parent) {
 
             startNativeDeployment: function (job) {
                 var self = this;
-                function next() {
+                function schedule() {
                     if (job.cancelled) {
                         for (var cancelledId in job.nodes) {
                             if (job.nodes[cancelledId].status === 'queued' || job.nodes[cancelledId].status === 'downloading') {
@@ -1555,30 +1562,35 @@ module.exports = function (parent) {
                         self.updateMonitorUI(job);
                         return;
                     }
-                    var nodeId = null;
-                    for (var id in job.nodes) { if (job.nodes[id].status === 'queued') { nodeId = id; break; } }
-                    if (!nodeId) {
-                        job.status = 'completed';
-                        self.updateMonitorUI(job);
-                        return;
+                    while (job.activeTransfers < job.maxConcurrent) {
+                        var nodeId = null;
+                        for (var id in job.nodes) { if (job.nodes[id].status === 'queued') { nodeId = id; break; } }
+                        if (!nodeId) break;
+                        (function (currentNodeId) {
+                            var node = job.nodes[currentNodeId];
+                            node.status = 'downloading';
+                            job.activeTransfers++;
+                            self.sendNativeFile(job, currentNodeId).then(function () {
+                                node.status = 'completed';
+                                node.progress = 100;
+                                node.bytesTransferred = job.fileSize;
+                                if (job.runAfter) self.runNativeFile(job, currentNodeId);
+                            }).catch(function (error) {
+                                node.status = 'failed';
+                                node.error = error.message || String(error);
+                            }).then(function () {
+                                job.activeTransfers--;
+                                self.updateMonitorUI(job);
+                                schedule();
+                            });
+                        })(nodeId);
                     }
-                    var node = job.nodes[nodeId];
-                    node.status = 'downloading';
+                    var hasQueued = false;
+                    for (var pendingId in job.nodes) { if (job.nodes[pendingId].status === 'queued') { hasQueued = true; break; } }
+                    if (!hasQueued && job.activeTransfers === 0) job.status = 'completed';
                     self.updateMonitorUI(job);
-                    self.sendNativeFile(job, nodeId).then(function () {
-                        node.status = 'completed';
-                        node.progress = 100;
-                        node.bytesTransferred = job.fileSize;
-                        if (job.runAfter) self.runNativeFile(job, nodeId);
-                    }).catch(function (error) {
-                        node.status = 'failed';
-                        node.error = error.message || String(error);
-                    }).then(function () {
-                        self.updateMonitorUI(job);
-                        next();
-                    });
                 }
-                next();
+                schedule();
             },
 
             getNativeTarget: function (job, node) {
@@ -1602,11 +1614,17 @@ module.exports = function (parent) {
                     }
                     self.ensureNativeDirectory(nodeId, target).then(function () {
                         var redirect, offset = 0, complete = false, settled = false, readerBusy = false;
-                        var timeout = setTimeout(function () { finish(new Error('Таймаут подключения к файловому каналу')); }, 30000);
+                        var connectionTimer = setTimeout(function () { finish(new Error('Таймаут подключения к файловому каналу')); }, 30000);
+                        var activityTimer = null;
+                        function touch() {
+                            if (activityTimer) clearTimeout(activityTimer);
+                            activityTimer = setTimeout(function () { finish(new Error('Таймаут передачи: агент не подтвердил данные в течение 2 минут')); }, 120000);
+                        }
                         function finish(error) {
                             if (settled) return;
                             settled = true;
-                            clearTimeout(timeout);
+                            clearTimeout(connectionTimer);
+                            if (activityTimer) clearTimeout(activityTimer);
                             delete self.nativeTransfers[nodeId];
                             try { if (redirect) redirect.Stop(); } catch (e) {}
                             if (error) reject(error); else resolve();
@@ -1630,6 +1648,7 @@ module.exports = function (parent) {
                                     framed.set(bytes, 1);
                                     redirect.send(framed);
                                 } else { redirect.send(bytes); }
+                                touch();
                                 offset = end;
                                 node.bytesTransferred = offset;
                                 node.progress = Math.round((offset / job.fileSize) * 100);
@@ -1641,6 +1660,7 @@ module.exports = function (parent) {
                             var message = data;
                             try { if (typeof data === 'string') message = JSON.parse(data); } catch (e) { return; }
                             if (!message || parseInt(message.reqid) !== 1) return;
+                            touch();
                             if (message.action === 'uploadstart' || message.action === 'uploadack') sendNext();
                             else if (message.action === 'uploaddone') finish();
                             else if (message.action === 'uploaderror') finish(new Error('Агент не смог записать файл в ' + target.directory));
@@ -1649,7 +1669,11 @@ module.exports = function (parent) {
                         redirect = CreateAgentRedirect(meshserver, filesProtocol, serverPublicNamePort, authCookie, authRelayCookie, domainUrl);
                         self.nativeTransfers[nodeId] = redirect;
                         redirect.onStateChanged = function (x, state) {
-                            if (state === 3) sendText({ action: 'upload', reqid: 1, path: target.directory, name: target.name, size: job.fileSize });
+                            if (state === 3) {
+                                clearTimeout(connectionTimer);
+                                touch();
+                                sendText({ action: 'upload', reqid: 1, path: target.directory, name: target.name, size: job.fileSize });
+                            }
                             else if (state === 0 && offset > 0) finish(new Error('Файловый канал был отключён'));
                         };
                         try { redirect.Start(nodeId); } catch (e) { finish(e); }
@@ -1661,7 +1685,7 @@ module.exports = function (parent) {
                 return new Promise(function (resolve) {
                     var command = target.isWindows ? "powershell -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory -Force -Path '" + target.directory.replace(/'/g, "''") + "' | Out-Null\"" : "mkdir -p '" + target.directory.replace(/'/g, "'\\''") + "'";
                     try { meshserver.send({ action: 'runcommands', nodeids: [nodeId], type: 3, runAsUser: 0, cmds: command }); } catch (e) {}
-                    setTimeout(resolve, 800);
+                    setTimeout(resolve, 1500);
                 });
             },
 
