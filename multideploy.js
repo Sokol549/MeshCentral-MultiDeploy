@@ -1399,7 +1399,14 @@ module.exports = function (parent) {
 
             onMasterCheckbox: function (checked) {
                 var self = this;
+                var meshFilter = document.getElementById('md-mesh-filter') ? document.getElementById('md-mesh-filter').value : 'all';
+                var searchFilter = document.getElementById('md-search-filter') ? document.getElementById('md-search-filter').value.toLowerCase() : '';
                 self.nodes.forEach(function (n) {
+                    if (meshFilter !== 'all' && n.meshid !== meshFilter) return;
+                    if (searchFilter) {
+                        var text = (n.name + ' ' + (n.ip || '') + ' ' + (n.os || '')).toLowerCase();
+                        if (text.indexOf(searchFilter) === -1) return;
+                    }
                     if (checked) self.selectedNodes[n._id] = true;
                     else delete self.selectedNodes[n._id];
                 });
