@@ -1251,8 +1251,12 @@ module.exports = function (parent) {
                                 chunkData: base64Data
                             })
                         })
-                        .then(function (r) { return r.json(); })
+                        .then(function (r) {
+                            if (!r.ok) throw new Error('Сервер вернул HTTP ' + r.status);
+                            return r.json();
+                        })
                         .then(function (res) {
+                            if (!res || !res.ok) throw new Error((res && res.error) || 'Сервер не подтвердил загрузку');
                             currentChunk++;
                             var pct = Math.round((currentChunk / totalChunks) * 100);
                             var fill = document.getElementById('md-upload-fill');
