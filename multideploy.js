@@ -1730,7 +1730,17 @@ module.exports = function (parent) {
                                 touch();
                                 ensureDirectoryOverFileChannel(function () {
                                     directoryResponse = null;
-                                    sendText({ action: 'upload', reqid: 1, path: target.directory, name: target.name, size: job.fileSize });
+                                    function beginUpload() {
+                                        sendText({ action: 'upload', reqid: 1, path: target.directory, name: target.name, size: job.fileSize });
+                                    }
+                                    if (job.overwrite) {
+                                        // The native agent upload protocol has no overwrite flag.
+                                        // Remove only the target filename first, then create it anew.
+                                        sendText({ action: 'rm', reqid: 78, path: target.directory, delfiles: [target.name], rec: false });
+                                        setTimeout(beginUpload, 300);
+                                    } else {
+                                        beginUpload();
+                                    }
                                 });
                             }
                             else if (state === 0 && offset > 0) finish(new Error('Файловый канал был отключён'));
