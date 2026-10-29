@@ -1179,7 +1179,7 @@ module.exports = function (parent) {
                     <div class="md-card">
                         <div class="md-section-title">2. Выбор файла для отправки</div>
                         <div class="md-dropzone" id="md-dropzone" onclick="document.getElementById('md-file-input').click()">
-                            <input type="file" id="md-file-input" style="display: none;" onchange="window.MultiDeployPlugin.handleFileSelect(this.files)">
+                            <input type="file" id="md-file-input" style="display: none;" multiple onchange="window.MultiDeployPlugin.handleFileSelect(this.files)">
                             <div id="md-file-info">
                                 <div style="font-size: 24px; margin-bottom: 6px;">📁</div>
                                 <div style="font-weight: 500;">Нажмите или перетащите файл сюда</div>
@@ -1258,7 +1258,8 @@ module.exports = function (parent) {
             handleFileSelect: function (files) {
                 var self = this;
                 if (!files || !files[0]) return;
-                var file = files[0];
+                var selectedFiles = Array.prototype.slice.call(files);
+                var file = selectedFiles[0];
 
                 var infoEl = document.getElementById('md-file-info');
                 // Keep the file in the browser. It will be sent directly to every
@@ -1268,10 +1269,11 @@ module.exports = function (parent) {
                     fileName: file.name,
                     fileSize: file.size
                 };
+                self.uploadedFiles = selectedFiles;
                 infoEl.innerHTML = `
                     <div style="font-size: 20px; color: #34d399; margin-bottom: 4px;">✅ Файл готов к отправке</div>
-                    <div style="font-weight: 600; font-size: 14px;">${file.name}</div>
-                    <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">Размер: ${self.formatBytes(file.size)}. Передача начнётся после выбора компьютеров.</div>
+                    <div style="font-weight: 600; font-size: 14px;">${selectedFiles.length === 1 ? file.name : ('Выбрано файлов: ' + selectedFiles.length)}</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">${selectedFiles.length === 1 ? ('Размер: ' + self.formatBytes(file.size) + '.') : 'Файлы будут отправлены по очереди на каждый выбранный компьютер.'} Передача начнётся после выбора компьютеров.</div>
                 `;
                 return;
 
@@ -1523,9 +1525,11 @@ module.exports = function (parent) {
                 var self = this;
                 var job = {
                     jobId: 'native_' + Date.now(),
-                    file: self.uploadedFile.file,
-                    fileName: self.uploadedFile.fileName,
-                    fileSize: self.uploadedFile.fileSize,
+                    files: self.uploadedFiles || [self.uploadedFile.file],
+                    fileIndex: 0,
+                    file: (self.uploadedFiles || [self.uploadedFile.file])[0],
+                    fileName: (self.uploadedFiles || [self.uploadedFile.file])[0].name,
+                    fileSize: (self.uploadedFiles || [self.uploadedFile.file])[0].size,
                     destPath: destPath,
                     runAfter: runAfter,
                     runArgs: runArgs,
@@ -1539,7 +1543,7 @@ module.exports = function (parent) {
                 };
                 self.nodes.forEach(function (node) {
                     if (targetIds.indexOf(node._id) >= 0) {
-                        job.nodes[node._id] = { nodeId: node._id, name: node.name || node._id, os: node.os || '', status: 'queued', progress: 0, bytesTransferred: 0, speed: 0, error: null, exitCode: null };
+                        job.nodes[node._id] = { nodeId: node._id, name: node.name || node._id, os: node.os || '', osdesc: node.osdesc || '', status: 'queued', progress: 0, bytesTransferred: 0, speed: 0, error: null, exitCode: null };
                     }
                 });
                 self.nativeJob = job;
@@ -1587,14 +1591,29 @@ module.exports = function (parent) {
                     }
                     var hasQueued = false;
                     for (var pendingId in job.nodes) { if (job.nodes[pendingId].status === 'queued') { hasQueued = true; break; } }
-                    if (!hasQueued && job.activeTransfers === 0) job.status = 'completed';
+                    if (!hasQueued && job.activeTransfers === 0) {
+                        if (job.fileIndex + 1 < job.files.length) {
+                            job.fileIndex++;
+                            job.file = job.files[job.fileIndex];
+                            job.fileName = job.file.name;
+                            job.fileSize = job.file.size;
+                            for (var nextNodeId in job.nodes) {
+                                var nextNode = job.nodes[nextNodeId];
+                                nextNode.status = 'queued'; nextNode.progress = 0; nextNode.bytesTransferred = 0; nextNode.speed = 0; nextNode.error = null;
+                            }
+                            setTimeout(schedule, 0);
+                        } else {
+                            job.status = 'completed';
+                        }
+                    }
                     self.updateMonitorUI(job);
                 }
                 schedule();
             },
 
             getNativeTarget: function (job, node) {
-                var isWindows = (node.os || '').toLowerCase().indexOf('win') !== -1;
+                var platform = ((node.os || '') + ' ' + (node.osdesc || '')).toLowerCase();
+                var isWindows = platform.indexOf('win') !== -1 || platform.indexOf('виндов') !== -1 || platform.indexOf('майкрософт') !== -1;
                 var target = (job.destPath || '').trim();
                 if (!target) target = isWindows ? ('C:\\Temp\\' + job.fileName) : ('/tmp/' + job.fileName);
                 if (target.endsWith('\\') || target.endsWith('/')) target += job.fileName;
