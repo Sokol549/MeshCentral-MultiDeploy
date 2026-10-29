@@ -46,10 +46,7 @@ module.exports = function (parent) {
     // Server-side startup hook
     obj.server_startup = function () {
         console.log('[MultiDeploy] Multi-Device File Deployer Plugin loaded.');
-        var app = obj.meshServer.app || (obj.meshServer.webserver ? obj.meshServer.webserver.app : null);
-        if (app) {
-            registerRoutes(app);
-        }
+        registerRoutesWhenReady(30);
     };
 
     // Express HTTP hook
@@ -57,6 +54,23 @@ module.exports = function (parent) {
         // MeshCentral passes its WebServer object to this hook, not the Express app.
         registerRoutes(webserver && (webserver.app || webserver));
     };
+
+    function getExpressApp() {
+        if (!obj.meshServer) return null;
+        return obj.meshServer.app || (obj.meshServer.webserver && obj.meshServer.webserver.app) || null;
+    }
+
+    function registerRoutesWhenReady(attemptsLeft) {
+        try {
+            if (registerRoutes(getExpressApp())) return;
+        } catch (e) {
+            console.log('[MultiDeploy] HTTP route registration failed:', e.message);
+        }
+
+        if (attemptsLeft > 0) {
+            setTimeout(function () { registerRoutesWhenReady(attemptsLeft - 1); }, 1000);
+        }
+    }
 
     // Watchdog timer to catch timeouts (runs every 10 seconds)
     setInterval(function () {
@@ -132,10 +146,9 @@ module.exports = function (parent) {
     // Register all API & transfer routes
     function registerRoutes(app) {
         if (!app || typeof app.get !== 'function' || typeof app.post !== 'function') {
-            console.log('[MultiDeploy] HTTP routes were not registered: Express app is unavailable.');
             return;
         }
-        if (app._multideploy_registered) return;
+        if (app._multideploy_registered) return true;
         app._multideploy_registered = true;
 
         // 1. Get nodes & meshes list from server database
@@ -501,6 +514,7 @@ module.exports = function (parent) {
                 }
             });
         });
+        return true;
     }
 
     // Dispatch deploy command to a single agent
