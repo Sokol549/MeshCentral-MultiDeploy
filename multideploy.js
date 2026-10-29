@@ -22,6 +22,7 @@ module.exports = function (parent) {
     // In-memory state
     var activeJobs = {};
     var jobHistory = [];
+    var routeRegistrationAttempts = 0;
 
     // Ensure storage directories exist
     try {
@@ -71,6 +72,25 @@ module.exports = function (parent) {
             setTimeout(function () { registerRoutesWhenReady(attemptsLeft - 1); }, 1000);
         }
     }
+
+    // Some MeshCentral releases load plugins before firing server hooks. Start an
+    // independent registration check so the API does not depend on hook timing.
+    function ensureRoutesRegistered() {
+        try {
+            if (registerRoutes(getExpressApp())) return;
+        } catch (e) {
+            console.log('[MultiDeploy] HTTP route registration failed:', e.message);
+        }
+
+        routeRegistrationAttempts++;
+        if (routeRegistrationAttempts < 60) {
+            setTimeout(ensureRoutesRegistered, 1000);
+        } else {
+            console.log('[MultiDeploy] HTTP routes were not registered after 60 seconds.');
+        }
+    }
+
+    setTimeout(ensureRoutesRegistered, 1000);
 
     // Watchdog timer to catch timeouts (runs every 10 seconds)
     setInterval(function () {
@@ -150,6 +170,7 @@ module.exports = function (parent) {
         }
         if (app._multideploy_registered) return true;
         app._multideploy_registered = true;
+        console.log('[MultiDeploy] HTTP API routes registered.');
 
         // 1. Get nodes & meshes list from server database
         app.get('/plugin/multideploy/api/nodes', function (req, res) {
