@@ -48,6 +48,12 @@ module.exports = function (parent) {
     obj.server_startup = function () {
         console.log('[MultiDeploy] Multi-Device File Deployer Plugin loaded.');
         registerRoutesWhenReady(30);
+        // MeshCentral 1.3.x reloads the server module but otherwise keeps the
+        // browser plugin bundle cached until a full server restart. Refresh it
+        // here so a plugin-only reload also delivers the current client code.
+        if (obj.meshServer && typeof obj.meshServer.updateMeshCore === 'function') {
+            obj.meshServer.updateMeshCore();
+        }
     };
 
     // Express HTTP hook
