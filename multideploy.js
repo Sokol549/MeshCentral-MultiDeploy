@@ -1075,6 +1075,12 @@ module.exports = function (parent) {
                 var self = this;
                 var existing = document.getElementById('multideploy-modal-overlay');
                 if (existing) existing.remove();
+                // MeshCentral redirects printable keys to its device filter unless
+                // it believes a dialog is open. Mark this custom dialog as active.
+                if (typeof xxdialogMode !== 'undefined') {
+                    self.previousMeshDialogMode = xxdialogMode;
+                    xxdialogMode = 99;
+                }
 
                 var overlay = document.createElement('div');
                 overlay.id = 'multideploy-modal-overlay';
@@ -1109,6 +1115,10 @@ module.exports = function (parent) {
             closeModal: function () {
                 var overlay = document.getElementById('multideploy-modal-overlay');
                 if (overlay) overlay.remove();
+                if (typeof xxdialogMode !== 'undefined' && this.previousMeshDialogMode !== undefined) {
+                    xxdialogMode = this.previousMeshDialogMode;
+                    delete this.previousMeshDialogMode;
+                }
                 if (this.pollTimer) clearInterval(this.pollTimer);
             },
 

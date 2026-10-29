@@ -1,7 +1,7 @@
 {
   "name": "Multi-Device File Deployer",
   "shortName": "multideploy",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "author": "sokol549",
   "description": "Плагин для отправки файлов на несколько компьютеров одновременно с отслеживанием прогресса передачи и статуса в реальном времени.",
   "hasAdminPanel": true,
