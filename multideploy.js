@@ -1376,9 +1376,12 @@ module.exports = function (parent) {
 
             selectAllOnline: function () {
                 var self = this;
+                var meshFilter = document.getElementById('md-mesh-filter') ? document.getElementById('md-mesh-filter').value : 'all';
                 self.selectedNodes = {};
                 self.nodes.forEach(function (n) {
-                    if (n.online) self.selectedNodes[n._id] = true;
+                    if (n.online && (meshFilter === 'all' || n.meshid === meshFilter)) {
+                        self.selectedNodes[n._id] = true;
+                    }
                 });
                 self.filterNodes();
             },
