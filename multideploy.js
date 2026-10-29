@@ -1140,7 +1140,7 @@ module.exports = function (parent) {
                             <select id="md-mesh-filter" class="md-select" style="flex: 1;" onchange="window.MultiDeployPlugin.filterNodes()">
                                 ${meshOptions}
                             </select>
-                            <input type="text" id="md-search-filter" class="md-input" placeholder="Поиск по имени или IP..." style="flex: 1;" oninput="window.MultiDeployPlugin.filterNodes()">
+                            <input type="text" id="md-search-filter" class="md-input" placeholder="Поиск по имени или IP..." style="flex: 1;" oninput="window.MultiDeployPlugin.filterNodes()" onclick="event.stopPropagation(); this.focus();" onkeydown="event.stopPropagation();" onkeypress="event.stopPropagation();" onkeyup="event.stopPropagation();">
                             <button class="md-btn md-btn-secondary" onclick="window.MultiDeployPlugin.selectAllOnline()">Только в сети</button>
                             <button class="md-btn md-btn-secondary" onclick="window.MultiDeployPlugin.toggleSelectAll()">Все</button>
                             <button class="md-btn md-btn-secondary" title="Обновить список компьютеров" onclick="window.MultiDeployPlugin.loadNodes(function(){ window.MultiDeployPlugin.filterNodes(); })">🔄</button>
@@ -1183,11 +1183,11 @@ module.exports = function (parent) {
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
                             <div>
                                 <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Путь назначения на клиенте:</label>
-                                <input type="text" id="md-dest-path" class="md-input" style="width: 95%;" placeholder="По умолчанию: C:\\Temp\\ или /tmp/">
+                                <input type="text" id="md-dest-path" class="md-input" style="width: 95%;" placeholder="По умолчанию: C:\\Temp\\ или /tmp/" onclick="event.stopPropagation(); this.focus();" onkeydown="event.stopPropagation();" onkeypress="event.stopPropagation();" onkeyup="event.stopPropagation();">
                             </div>
                             <div>
                                 <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Аргументы запуска (если запуск включен):</label>
-                                <input type="text" id="md-run-args" class="md-input" style="width: 95%;" placeholder="Например: /quiet /norestart или --silent">
+                                <input type="text" id="md-run-args" class="md-input" style="width: 95%;" placeholder="Например: /quiet /norestart или --silent" onclick="event.stopPropagation(); this.focus();" onkeydown="event.stopPropagation();" onkeypress="event.stopPropagation();" onkeyup="event.stopPropagation();">
                             </div>
                         </div>
                         <div style="display: flex; gap: 20px; font-size: 13px;">
